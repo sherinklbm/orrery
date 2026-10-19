@@ -34,6 +34,8 @@ case "$*" in "restart ssh") [ "$(cat "$T/ssh_can_start")" = "yes" ] && echo yes 
 exit 0
 S
   printf '#!/bin/bash\nexit 0\n' > "$T/bin/logger"; cp "$T/bin/logger" "$T/bin/sleep"
+  # The scripts refuse to run unless root. Pretend to be root here, so the tests also run as a normal user (as in CI).
+  printf '#!/bin/bash\n[ "$1" = "-u" ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' > "$T/bin/id"
   printf '#!/bin/bash\necho "$*" >> "$T/systemd-run.log"\n' > "$T/bin/systemd-run"
   chmod +x "$T"/bin/*
   export PATH="$T/bin:$PATH"
