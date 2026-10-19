@@ -38,6 +38,12 @@ c="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "https://$DOMAIN/healthz")"; [
 c="$(curl -sI -o /dev/null -w '%{http_code}' -m 15 "https://$DOMAIN/healthz")"; [ "$c" = 200 ] && ok "HEAD requests work (monitors, curl -I)" || note "HEAD on /healthz answered $c (an old panel version?)"
 c="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "https://$N8N_DOMAIN/")"; case "$c" in 200|30?) ok "https://$N8N_DOMAIN works ($c)" ;; *) bad "https://$N8N_DOMAIN answered $c" ;; esac
 c="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://$DOMAIN/api/status")"; [ "$c" = 401 ] && ok "the panel's API refuses visitors who are not signed in" || bad "/api/status without sign-in answered $c (expected 401)"
+tf="$(docker compose exec -T console python -c "import os, server; print(server.TwoFactor(server.Store(os.environ['CONSOLE_DB'])).enabled() if hasattr(server, 'TwoFactor') else 'old')" 2>/dev/null | tr -d '\r' | tail -n1)"
+case "$tf" in
+  True) ok "two-factor sign-in is on" ;;
+  False) note "two-factor sign-in is not set up yet: sign in to the panel and follow the set-up" ;;
+  *) note "could not check two-factor sign-in (panel version without it?)" ;;
+esac
 
 echo "== AI models list (what the AI tab's Browse button uses)"
 cnt="$(docker compose exec -T console python -c "import json,urllib.request as u; print(len(json.load(u.urlopen('https://openrouter.ai/api/v1/models', timeout=25))['data']))" 2>/dev/null | tr -dc '0-9')"
