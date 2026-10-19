@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# One-screen health check you can run from any working terminal, with no secrets in the output.
+echo "== time";        date; timedatectl 2>/dev/null | grep -E "Time zone|synchronized"
+echo "== ssh";         systemctl is-active ssh ssh.socket 2>/dev/null | paste -sd' '
+sshd -T 2>/dev/null | grep -E "^(port|passwordauthentication|permitrootlogin|maxauthtries) "
+echo "   listening:";  ss -ltn | awk 'NR==1 || /:22 /'
+echo "== ssh keys (type and label only)"; awk '{print $1, $NF}' /root/.ssh/authorized_keys 2>/dev/null
+echo "== ssh guard (last events)"; journalctl -t orrery-ssh-guard -t orrery-ssh --no-pager -n 5 2>/dev/null
+echo "== rollback timer pending?"; systemctl list-timers --no-pager 2>/dev/null | grep -i orrery-ssh-rollback || echo "none"
+echo "== firewall";    ufw status 2>/dev/null | head -12
+echo "== memory and disk"; free -h | head -2; df -h / | tail -1
+echo "== containers"; (cd /opt/orrery/deploy 2>/dev/null && docker compose ps --format "table {{.Service}}\t{{.Status}}") 2>&1
+echo "== site";        curl -s -o /dev/null -w "local control panel health: %{http_code}\n" http://127.0.0.1:8080/healthz
+echo "== reboot needed?"; [ -f /var/run/reboot-required ] && echo "yes" || echo "no"
+echo "== will it come back by itself after a reboot or power cut?"
+chk() { if eval "$2" >/dev/null 2>&1; then echo "  OK     $1"; else echo "  CHECK  $1"; fi; }
+chk "docker starts at boot"                 "systemctl is-enabled docker"
+chk "stack re-created at boot (orrery-stack)" "systemctl is-enabled orrery-stack.service"
+chk "SSH guard timer enabled"               "systemctl is-enabled orrery-ssh-guard.timer"
+chk "firewall enabled"                      "ufw status | grep -q 'Status: active'"
+chk "cron (nightly backup) enabled"         "systemctl is-enabled cron && test -f /etc/cron.d/orrery-backup"
+chk "swap is permanent (fstab)"             "grep -q '^/swapfile' /etc/fstab"
+chk "Tailscale starts at boot"              "systemctl is-enabled tailscaled"
+chk "containers restart on their own"       "cd /opt/orrery/deploy && ! docker compose ps -q | xargs -r docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' | grep -qvE '^(unless-stopped|always)\$'"
+chk "Hermes helper (control panel link) enabled" "systemctl is-enabled orrery-bridge.service"
+if id hermes >/dev/null 2>&1; then
+  chk "Hermes background service survives logout (linger)" "loginctl show-user hermes -p Linger | grep -q yes"
+  chk "Hermes gateway starts at boot"       "ls /home/hermes/.config/systemd/user/*.wants/hermes-gateway.service"
+fi
+newest="$(ls -1t /var/backups/orrery/console-*.db 2>/dev/null | head -1)"
+if [ -n "$newest" ]; then
+  age=$(( ( $(date +%s) - $(stat -c %Y "$newest") ) / 3600 ))
+  if [ "$age" -le 30 ]; then echo "  OK     newest backup on this server is ${age}h old"; else echo "  CHECK  newest backup is ${age}h old (nightly job not running?)"; fi
+else echo "  CHECK  no backup found on this server yet"; fi
+echo "  NOTE   backups on this server do not survive a re-image. Copy them off the server: bash deploy/pull-backups.sh ..."
+echo "== AI provider settings (no keys shown)"
+(cd /opt/orrery/deploy 2>/dev/null && docker compose exec -T console python -c "
+import json, sqlite3
+row = sqlite3.connect('/data/console.db').execute(\"SELECT value FROM settings WHERE key='ai_config'\").fetchone()
+s = json.loads(row[0]) if row else {}
+a = s.get('active'); e = s.get('providers', {}).get(a or '', {})
+print('  active:', e.get('name', a) or 'none selected', '| model:', e.get('model', '-'), '| key saved:', bool(e.get('api_key')), '| saved providers:', len(s.get('providers', {})))
+" 2>&1 | tail -1) || echo "  (could not read)"

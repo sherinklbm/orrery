@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Keeps SSH reachable. Runs every minute from a systemd timer (installed by install.sh).
+#
+# If the SSH configuration is invalid, or nothing is listening on the SSH port, this restarts SSH and, if
+# that is not enough, restores the last known-good configuration (saved by orrery-ssh-confirm), or
+# removes the drop-ins this project added. It only ever touches /etc/ssh and the ssh service.
+set -uo pipefail
+SSH_DIR="${ORRERY_SSH_DIR:-/etc/ssh}"
+STATE="${ORRERY_STATE:-/var/lib/orrery}"
+
+GOOD="$STATE/sshd-known-good"
+log() { logger -t orrery-ssh-guard "$*"; echo "$*"; }
+
+ports() {
+  local p
+  p="$(sshd -T 2>/dev/null | awk '/^port /{print $2}' | sort -u)"
+  echo "${p:-22}"
+}
+
+listening() {
+  local p
+  for p in $(ports); do
+    ss -ltn 2>/dev/null | grep -qE ":${p}[[:space:]]" && return 0
+  done
+  return 1
+}
+
+config_ok() { sshd -t 2>/dev/null; }
+
+restart_ssh() {
+  systemctl restart ssh.socket 2>/dev/null || true
+  systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+  sleep 3
+}
+
+restore_known_good() {
+  if [ -f "$GOOD/sshd_config" ]; then
+    log "restoring the last known-good SSH configuration"
+    cp -a "$GOOD/sshd_config" "$SSH_DIR"/sshd_config
+    if [ -d "$GOOD/sshd_config.d" ]; then
+      rm -rf "$SSH_DIR"/sshd_config.d
+      cp -a "$GOOD/sshd_config.d" "$SSH_DIR"/sshd_config.d
+    fi
+  else
+    log "no known-good copy; removing the drop-ins added by this project"
+    rm -f "$SSH_DIR"/sshd_config.d/00-orrery-strict.conf "$SSH_DIR"/sshd_config.d/10-orrery-safe.conf
+  fi
+}
+
+if ! config_ok; then
+  log "SSH configuration is invalid"
+  restore_known_good
+  config_ok || { log "still invalid after restore; leaving it for a human"; exit 1; }
+  restart_ssh
+fi
+
+if ! listening; then
+  log "nothing is listening on the SSH port; restarting ssh"
+  restart_ssh
+  if ! listening; then
+    restore_known_good
+    config_ok && restart_ssh
+    listening && log "SSH is back after restoring the known-good configuration" || log "SSH is still down"
+  else
+    log "SSH is back after a restart"
+  fi
+fi
+exit 0

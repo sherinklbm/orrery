@@ -1,0 +1,105 @@
+# Orrery stack: Caddy (HTTPS) -> Orrery (example.com) and n8n (n8n.example.com), plus the AI gateway.
+# Hermes runs on the host as its own user, with a small helper beside it (see ../bridge and enable-bridge.sh).
+name: orrery
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+      N8N_DOMAIN: ${N8N_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 192m
+    depends_on:
+      - console
+      - n8n
+
+  # The control panel: sign-in, AI providers and keys, the Hermes <-> n8n connection.
+  console:
+    build: ../console
+    restart: unless-stopped
+    environment:
+      CONSOLE_USER: ${CONSOLE_USER}
+      CONSOLE_PASSWORD_HASH: ${CONSOLE_PASSWORD_HASH}
+      CONSOLE_SECRET: ${CONSOLE_SECRET}
+      AI_RUNTIME_TOKEN: ${AI_RUNTIME_TOKEN}
+      LLM_GATE_TOKEN_HERMES: ${LLM_GATE_TOKEN_HERMES}
+      LLM_GATE_TOKEN_N8N: ${LLM_GATE_TOKEN_N8N}
+      N8N_URL: http://n8n:5678
+      N8N_PUBLIC_URL: https://${N8N_DOMAIN}
+      BRIDGE_SOCKET: /bridge/bridge.sock
+      CONSOLE_DB: /data/console.db
+      CONSOLE_HOST: 0.0.0.0
+      CONSOLE_PORT: "8080"
+      CONSOLE_TRUST_PROXY: "1"
+      CONSOLE_COOKIE_SECURE: "1"
+      CONSOLE_2FA: ${CONSOLE_2FA:-1}               # two-factor sign-in (0 turns it off; not recommended)
+    volumes:
+      - console_data:/data
+      - /var/lib/orrery-bridge:/bridge      # the Unix socket of the Hermes helper (made by enable-bridge.sh)
+    group_add:
+      - "10010"                              # the orrery-console group that may open that socket
+    ports:
+      - "127.0.0.1:8080:8080"                # host-only, for health checks
+    mem_limit: 256m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # The AI gateway: n8n (http://llm-gate:8081/v1) and Hermes (http://127.0.0.1:8081/v1) both call this. It asks the
+  # panel which provider, model and key are selected, so changing it there changes both, with no restarts.
+  llm-gate:
+    build: ../llm-gate
+    restart: unless-stopped
+    environment:
+      CONTROL_RUNTIME_URL: http://console:8080/api/ai/runtime
+      AI_RUNTIME_TOKEN: ${AI_RUNTIME_TOKEN}
+      LLM_GATE_TOKEN_N8N: ${LLM_GATE_TOKEN_N8N}
+      LLM_GATE_TOKEN_HERMES: ${LLM_GATE_TOKEN_HERMES}
+    ports:
+      - "127.0.0.1:8081:8081"                # host-only, so Hermes can reach it; never the internet
+    mem_limit: 64m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      N8N_HOST: ${N8N_DOMAIN}
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://${N8N_DOMAIN}/
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_SECURE_COOKIE: "true"
+      N8N_PROXY_HOPS: "1"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      NODES_EXCLUDE: '["n8n-nodes-base.executeCommand"]'
+      EXECUTIONS_DATA_PRUNE: "true"          # keep the SQLite file from growing forever
+      EXECUTIONS_DATA_MAX_AGE: "336"         # hours (14 days)
+      GENERIC_TIMEZONE: ${TZ:-UTC}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    ports:
+      - "127.0.0.1:5678:5678"   # host-only, so Hermes can call n8n without the internet
+    mem_limit: 1200m
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  caddy_data:
+  caddy_config:
+  console_data:
+  n8n_data:

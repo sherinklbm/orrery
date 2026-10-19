@@ -1,0 +1,17 @@
+# Local mode (deploy/local.sh): the panel, n8n and the AI gateway on localhost only, over plain HTTP.
+# No Caddy, no domain, no Hermes helper. Do not expose these ports to a network.
+services:
+  console:
+    environment:
+      CONSOLE_COOKIE_SECURE: "0"
+      CONSOLE_TRUST_PROXY: "0"
+      N8N_PUBLIC_URL: http://localhost:5678
+    volumes: !override
+      - console_data:/data
+  n8n:
+    environment:
+      N8N_HOST: localhost
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_SECURE_COOKIE: "false"
+      N8N_PROXY_HOPS: "0"

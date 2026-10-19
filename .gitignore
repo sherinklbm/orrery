@@ -1,0 +1,8 @@
+console/console.db
+__pycache__/
+*.pyc
+deploy/.env
+deploy/.env.local
+deploy/.env.local.bak
+*.db
+backups/

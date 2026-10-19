@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Keep the current SSH settings: cancel the automatic rollback and save them as the known-good copy
+# that orrery-ssh-guard restores if SSH ever breaks. Run it only AFTER you have logged in successfully
+# from a second terminal.
+set -euo pipefail
+SSH_DIR="${ORRERY_SSH_DIR:-/etc/ssh}"
+STATE="${ORRERY_STATE:-/var/lib/orrery}"
+[ "$(id -u)" -eq 0 ] || { echo "Run as root." >&2; exit 1; }
+sshd -t
+systemctl stop orrery-ssh-rollback.timer 2>/dev/null || true
+GOOD=$STATE/sshd-known-good
+mkdir -p "$STATE"
+rm -rf "$GOOD"
+mkdir -p "$GOOD"
+cp -a "$SSH_DIR"/sshd_config "$GOOD/sshd_config"
+cp -a "$SSH_DIR"/sshd_config.d "$GOOD/sshd_config.d"
+logger -t orrery-ssh "SSH settings confirmed and saved as known-good"
+echo "Confirmed. These SSH settings are now saved as the known-good copy, and the rollback is cancelled."

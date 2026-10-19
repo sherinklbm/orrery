@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Orrery self-test: checks every part of the system and prints PASS / WARN / FAIL lines. Run as root:  orrery-selftest
+# Read-only, except two tiny AI requests through the gateway (a few tokens each) to prove Hermes's and n8n's routes work.
+# It never prints a key, token or password. Safe to paste the whole output into a chat.
+APP_DIR="${APP_DIR:-/opt/orrery}"
+ENV_FILE="$APP_DIR/deploy/.env"
+pass=0; warn=0; fail=0
+ok()   { echo "  PASS  $*"; pass=$((pass + 1)); }
+note() { echo "  WARN  $*"; warn=$((warn + 1)); }
+bad()  { echo "  FAIL  $*"; fail=$((fail + 1)); }
+val()  { grep -m1 "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- | sed 's/^"//; s/"$//'; }
+tmp="$(mktemp -d)"; trap 'rm -rf -- "$tmp"' EXIT
+
+[ "$(id -u)" -eq 0 ] || { echo "Run as root."; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "No $ENV_FILE: is Orrery installed?"; exit 1; }
+DOMAIN="$(val DOMAIN)"; N8N_DOMAIN="$(val N8N_DOMAIN)"
+TH="$(val LLM_GATE_TOKEN_HERMES)"; TN="$(val LLM_GATE_TOKEN_N8N)"
+cd "$APP_DIR/deploy" || exit 1
+
+echo "== containers"
+state_of() { docker compose ps --format '{{.Service}} {{.State}} {{.Health}}' 2>/dev/null | awk -v s="$1" '$1==s {print $2, $3}'; }
+for s in caddy console llm-gate n8n; do
+  st="$(state_of "$s")"
+  for _ in $(seq 1 12); do [ "$st" = "running starting" ] || break; sleep 5; st="$(state_of "$s")"; done  # just restarted: give it a minute
+  case "$st" in
+    "running healthy") ok "$s is running and healthy" ;;
+    "running ") ok "$s is running" ;;
+    running*) note "$s is running but health is: ${st#running }" ;;
+    *) bad "$s is not running (${st:-missing})" ;;
+  esac
+done
+n="$(docker compose logs --since 30m console llm-gate 2>/dev/null | grep -c 'Traceback')"
+[ "$n" = 0 ] && ok "no crashes in the panel or gateway logs (last 30 min)" || bad "$n crash traces in the panel/gateway logs: docker compose logs --since 30m console llm-gate"
+
+echo "== web"
+c="$(curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:8080/healthz)"; [ "$c" = 200 ] && ok "panel answers locally" || bad "panel local health: $c"
+c="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "https://$DOMAIN/healthz")"; [ "$c" = 200 ] && ok "https://$DOMAIN works" || bad "https://$DOMAIN/healthz answered $c"
+c="$(curl -sI -o /dev/null -w '%{http_code}' -m 15 "https://$DOMAIN/healthz")"; [ "$c" = 200 ] && ok "HEAD requests work (monitors, curl -I)" || note "HEAD on /healthz answered $c (an old panel version?)"
+c="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "https://$N8N_DOMAIN/")"; case "$c" in 200|30?) ok "https://$N8N_DOMAIN works ($c)" ;; *) bad "https://$N8N_DOMAIN answered $c" ;; esac
+c="$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://$DOMAIN/api/status")"; [ "$c" = 401 ] && ok "the panel's API refuses visitors who are not signed in" || bad "/api/status without sign-in answered $c (expected 401)"
+
+echo "== AI models list (what the AI tab's Browse button uses)"
+cnt="$(docker compose exec -T console python -c "import json,urllib.request as u; print(len(json.load(u.urlopen('https://openrouter.ai/api/v1/models', timeout=25))['data']))" 2>/dev/null | tr -dc '0-9')"
+[ -n "$cnt" ] && [ "$cnt" -gt 50 ] && ok "the panel can fetch OpenRouter's full list ($cnt models)" || bad "the panel could not fetch OpenRouter's model list (no internet from the container?)"
+docker compose exec -T console test -f /app/modelcatalog.py && ok "panel has the model-list code" || bad "panel is an old version (no modelcatalog.py): rerun update.sh"
+
+echo "== AI gateway (Hermes and n8n routes)"
+for who in hermes n8n; do
+  [ "$who" = hermes ] && tok="$TH" || tok="$TN"
+  [ -n "$tok" ] || { note "no gateway token for $who in .env"; continue; }
+  models="$(curl -s -m 15 -H "Authorization: Bearer $tok" http://127.0.0.1:8081/v1/models | python3 -c 'import json,sys; print(" > ".join(m["id"] for m in json.load(sys.stdin).get("data", [])))' 2>/dev/null)"
+  [ -n "$models" ] && ok "$who model order: $models" || bad "$who: the gateway lists no model (none chosen on the AI tab?)"
+  code="$(curl -s -o "$tmp/$who.json" -D "$tmp/$who.h" -w '%{http_code}' -m 90 -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
+          -d '{"messages":[{"role":"user","content":"Reply with only the word: ok"}],"max_tokens":16}' http://127.0.0.1:8081/v1/chat/completions)"
+  used="$(grep -i '^x-orrery-model:' "$tmp/$who.h" 2>/dev/null | cut -d' ' -f2- | tr -d '\r')"
+  if [ "$code" = 200 ]; then
+    first="$(echo "$models" | cut -d' ' -f1)"
+    [ -z "$used" ] || [ "$used" = "$first" ] && ok "$who: a real AI answer came back (model ${used:-?})" || note "$who: answered by backup $used, so the main model ($first) is failing: test it on the AI tab"
+  else
+    msg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["error"]["message"][:160])' "$tmp/$who.json" 2>/dev/null)"
+    bad "$who: AI request failed ($code): ${msg:-no details}"
+  fi
+done
+c="$(curl -s -o /dev/null -w '%{http_code}' -m 10 -H 'Authorization: Bearer wrong-token-000000000000' http://127.0.0.1:8081/v1/models)"
+[ "$c" = 401 ] && ok "the gateway refuses a wrong token" || bad "the gateway answered $c to a wrong token"
+ss -ltn | grep -q '127.0.0.1:8081' && ! ss -ltn | grep -qE '0\.0\.0\.0:8081|\[::\]:8081' && ok "the gateway listens on localhost only" || bad "the gateway port 8081 is not localhost-only"
+
+echo "== Hermes"
+systemctl is-active --quiet orrery-bridge && ok "Hermes helper (panel link) is running" || bad "Hermes helper is not running: systemctl status orrery-bridge"
+st="$(systemctl --machine=hermes@.host --user is-active hermes-gateway 2>/dev/null)"; [ "$st" = active ] && ok "Hermes Telegram gateway is running" || bad "Hermes Telegram gateway: ${st:-unknown}"
+out="$(runuser -l hermes -c 'hermes mcp test n8n' 2>&1)"
+echo "$out" | grep -q 'Connected' && ok "Hermes reaches its n8n tools ($(echo "$out" | grep -o 'Tools discovered: [0-9]*'))" || bad "Hermes cannot reach n8n tools: $(echo "$out" | grep -E '✗|fail|error' | head -1 | cut -c1-160)"
+cfgline="$(grep -A3 '^  n8n:' /home/hermes/.hermes/config.yaml 2>/dev/null | tr -d '\n')"
+echo "$cfgline" | grep -q '/sse' && echo "$cfgline" | grep -q 'transport: sse' && ok "Hermes's n8n entry uses /sse with transport: sse" || bad "Hermes's n8n entry is missing /sse or transport: sse (press Connect on the Connect tab)"
+grep -q 'base_url: *"\?http://127.0.0.1:8081' /home/hermes/.hermes/config.yaml 2>/dev/null && ok "Hermes uses the AI gateway" || note "Hermes is not pointed at the AI gateway (Hermes tab: Use the AI gateway)"
+runuser -u hermes -- sudo -n true 2>/dev/null && ok "Hermes has sudo (as you chose)" || note "Hermes has no sudo"
+pid="$(pgrep -u hermes -f 'hermes.*gateway' | head -1)"; dg="$(getent group docker | cut -d: -f3)"
+[ -n "$pid" ] && grep -q "Groups:.*\b$dg\b" "/proc/$pid/status" 2>/dev/null && ok "the running Hermes has Docker access" || note "the running Hermes has no Docker group (systemctl restart user@\$(id -u hermes).service)"
+
+echo "== Hermes Desktop backend"
+st="$(systemctl --machine=hermes@.host --user is-active hermes-serve 2>/dev/null)"
+if [ "$st" = active ]; then
+  ok "hermes-serve is running"
+  systemctl --machine=hermes@.host --user is-enabled --quiet hermes-serve && ok "hermes-serve starts at boot" || note "hermes-serve is not enabled at boot"
+  bind="$(ss -ltn | awk '$4 ~ /:9119$/ {print $4}' | tr '\n' ' ')"
+  echo "$bind" | grep -qE '0\.0\.0\.0|\[::\]|50\.6\.' && bad "port 9119 is open beyond Tailscale: $bind" || ok "Desktop backend listens only on: ${bind:-nothing}"
+else
+  note "hermes-serve is ${st:-not installed} (only needed for Hermes Desktop)"
+fi
+ufw status | grep -q '9119' && bad "the firewall allows 9119 publicly" || ok "port 9119 is not opened in the firewall"
+
+echo "== safety and durability"
+systemctl is-active --quiet ssh && ok "SSH is running" || bad "SSH is not running"
+ufw status | grep -q '^Status: active' && ok "firewall active" || bad "firewall is not active"
+ufw status | grep -qE '^22/tcp +ALLOW' && ok "firewall allows SSH" || bad "firewall does not allow SSH on 22"
+tailscale status >/dev/null 2>&1 && ok "Tailscale is up" || note "Tailscale is not up"
+ls /var/backups/orrery/*.db >/dev/null 2>&1 && ok "a backup exists on this server ($(ls -t /var/backups/orrery | head -1))" || note "no backup on this server yet: bash $APP_DIR/deploy/backup.sh"
+systemctl is-enabled --quiet orrery-stack 2>/dev/null && ok "the stack starts at boot" || bad "orrery-stack is not enabled at boot"
+
+echo
+echo "Result: $pass passed, $warn warnings, $fail failed."
+[ "$fail" = 0 ]

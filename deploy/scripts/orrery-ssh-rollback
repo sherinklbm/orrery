@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Undo strict SSH. Runs automatically 10 minutes after orrery-ssh-strict unless you confirm it.
+set -uo pipefail
+SSH_DIR="${ORRERY_SSH_DIR:-/etc/ssh}"
+STATE="${ORRERY_STATE:-/var/lib/orrery}"
+[ "$(id -u)" -eq 0 ] || { echo "Run as root." >&2; exit 1; }
+rm -f "$SSH_DIR"/sshd_config.d/00-orrery-strict.conf
+if sshd -t 2>/dev/null; then
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+  logger -t orrery-ssh "strict SSH rolled back (password login restored)"
+  echo "Strict SSH rolled back."
+else
+  echo "sshd -t failed after removing the strict file; the guard will repair it within a minute." >&2
+fi
+systemctl stop orrery-ssh-rollback.timer 2>/dev/null || true

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Turn on strict SSH (key-only) SAFELY. Optional, and meant to be run last.
+#
+#   orrery-ssh-strict [--provider-ip ADDRESS] [--yes]
+#
+# What it does:
+#   1. Refuses unless root already has an SSH key installed.
+#   2. Backs up /etc/ssh, writes a strict drop-in, tests it with `sshd -t`, then reloads SSH.
+#   3. Starts a 10-minute AUTOMATIC ROLLBACK timer. Until you confirm, the change undoes itself.
+#   4. You open a NEW terminal, log in with your key, then run `orrery-ssh-confirm` here.
+#
+# --provider-ip keeps password login working only from that one address (for example a hosting
+# provider's web console, which signs in with the root password from a fixed address).
+set -euo pipefail
+SSH_DIR="${ORRERY_SSH_DIR:-/etc/ssh}"
+STATE="${ORRERY_STATE:-/var/lib/orrery}"
+
+[ "$(id -u)" -eq 0 ] || { echo "Run as root." >&2; exit 1; }
+PROVIDER_IP=""; ASSUME_YES=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --provider-ip) PROVIDER_IP="${2:?--provider-ip needs an address}"; shift 2 ;;
+    --yes) ASSUME_YES=1; shift ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+case "$PROVIDER_IP" in ""|*[!0-9a-fA-F:./]*) [ -z "$PROVIDER_IP" ] || { echo "Invalid --provider-ip" >&2; exit 1; } ;; esac
+
+KEYS="${ORRERY_KEYS:-/root/.ssh/authorized_keys}"
+[ -s "$KEYS" ] && grep -qE '^(ssh-|ecdsa-|sk-)' "$KEYS" || {
+  echo "No SSH key is installed for root. Add yours first, then run this again." >&2; exit 1; }
+
+if [ "$ASSUME_YES" -ne 1 ]; then
+  echo "Before continuing, open a SECOND terminal and confirm you can log in with your KEY."
+  read -rp "Have you done that and did it work? [y/N] " ok </dev/tty
+  [ "$ok" = "y" ] || [ "$ok" = "Y" ] || { echo "Cancelled. Nothing changed."; exit 0; }
+fi
+
+TS="$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$STATE"
+cp -a "$SSH_DIR" "$STATE/ssh-backup-$TS"
+
+CONF="$SSH_DIR"/sshd_config.d/00-orrery-strict.conf
+{
+  echo "PasswordAuthentication no"
+  echo "KbdInteractiveAuthentication no"
+  echo "PermitRootLogin prohibit-password"
+  if [ -n "$PROVIDER_IP" ]; then
+    echo "Match Address $PROVIDER_IP"
+    echo "    PasswordAuthentication yes"
+    echo "    KbdInteractiveAuthentication yes"
+  fi
+} > "$CONF"
+
+if ! sshd -t; then
+  rm -f "$CONF"
+  echo "The new configuration did not validate, so it was removed. Nothing changed." >&2
+  exit 1
+fi
+
+systemctl reload ssh 2>/dev/null || systemctl reload sshd
+systemctl stop orrery-ssh-rollback.timer 2>/dev/null || true
+systemd-run --quiet --unit=orrery-ssh-rollback --on-active=10min /usr/local/sbin/orrery-ssh-rollback
+
+cat <<EOF
+
+Strict SSH is ON, with an automatic rollback in 10 minutes.
+
+NOW, in a NEW terminal window (leave this one open), log in with your key:
+    ssh -o IdentitiesOnly=yes -i <your key> root@<this server>
+
+If that works, come back here and run:
+    orrery-ssh-confirm
+
+If you do nothing, or the login fails, the change reverts by itself in 10 minutes
+(or run orrery-ssh-rollback now).
+EOF

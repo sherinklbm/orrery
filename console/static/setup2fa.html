@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up two-factor sign-in</title>
+<meta name="robots" content="noindex">
+<script src="/static/theme.js"></script>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/theme.css">
+</head>
+<body class="home">
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>orrery</a>
+    <div class="nav-actions"><button class="btn btn-ghost btn-sm" id="logout" type="button">Sign out</button></div>
+  </div>
+</header>
+<main class="app-main">
+  <div class="card" id="step1">
+    <h2>Turn on two-factor sign-in</h2>
+    <div class="caption">This is required once, before the panel opens. After this, every sign-in asks for your password and a 6-digit code from your phone.</div>
+    <ol class="small-list">
+      <li>Install an authenticator app if you have none: Google Authenticator, Microsoft Authenticator, 1Password, Bitwarden, Aegis or Authy.</li>
+      <li>In the app choose <b>add account</b> and scan this code.</li>
+      <li>Type the 6-digit code it shows, then press the button.</li>
+    </ol>
+    <div class="qr-box" id="qr" aria-label="QR code for your authenticator app"></div>
+    <div class="caption">Can't scan? Choose <b>enter a setup key</b> in the app and type this key (time-based):</div>
+    <pre id="secret" class="secret"></pre>
+    <label for="code">6-digit code from the app</label>
+    <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" spellcheck="false">
+    <button class="btn btn-primary btn-block" id="enable" type="button">Turn on two-factor sign-in</button>
+    <div id="msg" class="ok"></div>
+  </div>
+  <div class="card hidden" id="step2">
+    <h2>Save your recovery codes</h2>
+    <div class="caption">If you lose your phone, each of these codes signs you in once instead of the 6-digit code. They are shown only now. Keep them somewhere safe and offline, such as a password manager.</div>
+    <pre id="codes" class="secret"></pre>
+    <div class="row ai-actions">
+      <button class="btn btn-ghost btn-sm" id="copy" type="button">Copy</button>
+      <button class="btn btn-ghost btn-sm" id="download" type="button">Download as a text file</button>
+    </div>
+    <div class="check"><input id="saved" type="checkbox"><label for="saved">I have saved these codes</label></div>
+    <button class="btn btn-primary btn-block" id="continue" type="button" disabled>Open the panel</button>
+  </div>
+</main>
+<script src="/static/qrcode.js"></script>
+<script src="/static/setup2fa.js"></script>
+</body>
+</html>

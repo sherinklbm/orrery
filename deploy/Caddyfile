@@ -1,0 +1,46 @@
+{
+	email {$ACME_EMAIL}
+}
+
+# Orrery: sign-in and the panel.
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+	# The AI gateway reads the key from this path inside Docker only; never serve it to the internet.
+	@internal path /api/ai/runtime /api/ai/runtime/*
+	respond @internal 404
+	reverse_proxy console:8080
+}
+
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
+}
+
+# n8n: the editor is reachable only after signing in to n8n.
+# Public webhook, form and MCP paths (including the instance-level MCP server, /mcp-server/*) are closed.
+# Hermes calls n8n on 127.0.0.1:5678 instead.
+{$N8N_DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	@public_triggers path /webhook/* /webhook-test/* /webhook-waiting/* /form/* /form-test/* /form-waiting/* /mcp/* /mcp-test/* /mcp-server/*
+	respond @public_triggers 403
+
+	# Optional extra lock: only allow your own IP addresses to reach the editor.
+	# @blocked not remote_ip 203.0.113.10
+	# respond @blocked 403
+
+	reverse_proxy n8n:5678
+}
