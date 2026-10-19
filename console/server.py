@@ -38,7 +38,7 @@ MAX_BODY = 64 * 1024
 COOKIE = "orrery_session"
 PAGES = {"/login": "login.html", "/app": "app.html", "/setup-2fa": "setup2fa.html"}
 SETUP_OK = {"/api/session", "/api/logout", "/api/2fa/setup", "/api/2fa/enable"}  # all a session without 2FA may use
-STATIC_TYPES = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
+STATIC_TYPES = {".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".woff2": "font/woff2"}
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",

@@ -447,7 +447,7 @@ function renderAI(v, keepSelection) {
     var secs = Math.max(0, Math.round((Date.now() - new Date(v.gate_seen).getTime()) / 1000));
     gate.textContent = "The gateway last picked up these settings " + (secs < 90 ? secs + " seconds" : Math.round(secs / 60) + " minutes") + " ago.";
   } else {
-    gate.textContent = "The gateway has not picked up these settings yet. Run deploy/setup-llm-gate.sh on the server.";
+    gate.textContent = "The gateway has not read these settings yet. It does so with its first AI request, within about 15 seconds of a change.";
   }
   var hist = $("aiHistory");
   hist.replaceChildren.apply(hist, v.history.length ? v.history.map(function (h) {

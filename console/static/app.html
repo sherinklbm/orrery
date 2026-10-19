@@ -3,16 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Orrery</title>
+<title>Console · Orrery</title>
 <meta name="robots" content="noindex">
 <script src="/static/theme.js"></script>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="/static/inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/plexmono-500.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/theme.css">
 </head>
-<body>
+<body class="panel">
 <header class="nav">
   <div class="wrap">
-    <a class="brand" href="/app"><span class="mark"></span>orrery</a>
+    <a class="brand" href="/app"><span class="mark" aria-hidden="true"></span>Orrery</a>
     <div class="nav-actions">
       <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch between light and dark theme">
         <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -24,6 +26,7 @@
 </header>
 
 <main class="app-main">
+  <div class="page-head"><div><p class="kicker">Owner console</p><h1>Control plane</h1><p>Models, agent and workflows, in one place.</p></div></div>
   <nav class="tabs" aria-label="Sections">
     <button class="tab active" data-tab="overview" type="button">Overview</button>
     <button class="tab" data-tab="ai" type="button">AI providers</button>
@@ -114,7 +117,7 @@
         <li>Anthropic, OpenAI, Google Gemini, NVIDIA, OpenRouter, DeepSeek, Groq, Mistral and more are listed. Use "Custom" for anything else with an OpenAI-compatible API.</li>
       </ul>
     </div>
-    <div class="card"><h2>Recent changes</h2><ul id="aiHistory"></ul></div>
+    <div class="card"><h2>Recent changes</h2><ul class="history" id="aiHistory"></ul></div>
   </section>
 
   <section id="tab-connect" class="hidden">
