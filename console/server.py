@@ -545,7 +545,7 @@ class Service:
 
 def make_handler(cfg, store, limiter, service=None):
     svc = service or Service(cfg, store)
-    gate_seen = {"at": 0.0}
+    gate_seen = {"at": float("-inf")}  # so the first read is always recorded, even right after boot
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "OrreryControl"
